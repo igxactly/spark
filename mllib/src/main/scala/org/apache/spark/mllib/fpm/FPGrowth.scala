@@ -235,18 +235,18 @@ class FPGrowth private (
       data: RDD[Array[Item]],
       minCount: Long,
       partitioner: Partitioner): Array[Item] = {
-    data.flatMap { t =>
+    data.flatMap { t => /* ## see if there is any duplication in a transaction */
       val uniq = t.toSet
       if (t.length != uniq.size) {
         throw new SparkException(s"Items in a transaction must be unique but got ${t.toSeq}.")
       }
       t
-    }.map(v => (v, 1L))
-      .reduceByKey(partitioner, _ + _)
-      .filter(_._2 >= minCount)
+    }.map(v => (v, 1L)) /* ## preparation for counting. (key, value) := (item, 1) */
+      .reduceByKey(partitioner, _ + _) /* ## count each items occurance by reducing */
+      .filter(_._2 >= minCount) /* ## discard items which under the minimum support */
       .collect()
-      .sortBy(-_._2)
-      .map(_._1)
+      .sortBy(-_._2) /* ## let it be sorted! */
+      .map(_._1) /* ## discard count? it seems we need only the list ordered by count */
   }
 
   /**
@@ -264,13 +264,13 @@ class FPGrowth private (
       partitioner: Partitioner): RDD[FreqItemset[Item]] = {
     val itemToRank = freqItems.zipWithIndex.toMap
     data.flatMap { transaction =>
-      genCondTransactions(transaction, itemToRank, partitioner)
-    }.aggregateByKey(new FPTree[Int], partitioner.numPartitions)(
+        genCondTransactions(transaction, itemToRank, partitioner) /* ## organize transactions by the ranks of its items and distribute to partitions */
+    }.aggregateByKey(new FPTree[Int], partitioner.numPartitions)( /* ## produce conditional FP-tree - parallelized into the number of partitions */
       (tree, transaction) => tree.add(transaction, 1L),
       (tree1, tree2) => tree1.merge(tree2))
-    .flatMap { case (part, tree) =>
+    .flatMap { case (part, tree) => /* ## merge the results (FP-trees) */
       tree.extract(minCount, x => partitioner.getPartition(x) == part)
-    }.map { case (ranks, count) =>
+    }.map { case (ranks, count) => /* ## produce frequent item sets from merged FP-tree */
       new FreqItemset(ranks.map(i => freqItems(i)).toArray, count)
     }
   }
